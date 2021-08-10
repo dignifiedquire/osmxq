@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+//use std::collections::HashMap;
+use ahash::AHashMap as HashMap;
 use desert::{varint,ToBytes,CountBytes,FromBytes};
 use crate::{QuadId,QTree,BBox,Error};
 

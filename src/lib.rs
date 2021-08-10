@@ -1,5 +1,6 @@
 #![feature(hash_drain_filter,async_closure)]
-use std::collections::HashMap;
+// use std::collections::HashMap;
+use ahash::AHashMap as HashMap;
 use lru::LruCache;
 use async_std::{prelude::*,fs,sync::{RwLock,Arc,Mutex},task};
 use desert::{varint,ToBytes,FromBytes};
@@ -815,7 +816,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let mut result: HashMap<QuadId,Vec<usize>> = HashMap::new();
     let mut positions = HashMap::new();
 
-    let mut rmap = HashMap::new();
+    let mut rmap = HashMap::with_capacity(records.len());
     for r in records.iter() {
       rmap.insert(r.get_id(), r.clone());
     }
@@ -1044,9 +1045,11 @@ impl<R> XQ<fs::File,R> where R: Record {
   }
 }
 
+#[inline]
 fn overlap(p: &Position, bbox: &BBox) -> bool {
   p.0 >= bbox.0 && p.0 <= bbox.2 && p.1 >= bbox.1 && p.1 <= bbox.3
 }
+#[inline]
 fn bbox_overlap(a: &BBox, b: &BBox) -> bool {
   a.2 >= b.0 && a.0 <= b.2 && a.3 >= b.1 && a.1 <= b.3
 }
