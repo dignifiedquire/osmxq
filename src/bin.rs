@@ -1,17 +1,16 @@
-#![feature(async_closure,backtrace)]
-use async_std::{task,channel};
-use std::collections::HashMap;
+#![feature(backtrace)]
+use crossbeam_channel as channel;
+use ahash::AHashMap as HashMap;
 use osmxq::{XQ,Record,RecordId,Position};
 use desert::{varint,ToBytes,FromBytes,CountBytes};
 
 type Error = Box<dyn std::error::Error+Send+Sync+'static>;
 
-#[async_std::main]
-async fn main() -> Result<(),Error> {
+fn main() -> Result<(),Error> {
   let (_args,argv) = argmap::parse(std::env::args());
   let outdir = argv.get("o").or_else(|| argv.get("outdir"))
     .and_then(|xs| xs.first()).unwrap();
-  let mut xq = XQ::open_from_path(&outdir).await?;
+  let mut xq = XQ::open_from_path(&outdir)?;
 
   let pbf_file = argv.get("i").or_else(|| argv.get("infile"))
     .and_then(|xs| xs.first()).unwrap();
@@ -19,32 +18,32 @@ async fn main() -> Result<(),Error> {
 
   let (sender,receiver) = channel::bounded::<Feature>(1_000_000);
   let mut work = vec![];
-  work.push(task::spawn(async move {
+  work.push(std::thread::spawn(move || {
     let mut records = vec![];
-    while let Ok(r) = receiver.recv().await {
+    while let Ok(r) = receiver.recv() {
       records.push(r);
       if records.len() >= 100_000 {
-        wrap_err(xq.add_records(&records).await.map_err(|e| e.into()));
+        wrap_err(xq.add_records(&records).map_err(|e| e.into()));
         records.clear();
       }
     }
     if !records.is_empty() {
-      wrap_err(xq.add_records(&records).await.map_err(|e| e.into()));
+      wrap_err(xq.add_records(&records).map_err(|e| e.into()));
     }
-    wrap_err(xq.finish().await.map_err(|e| e.into()));
-    wrap_err(xq.flush().await.map_err(|e| e.into()));
+    wrap_err(xq.finish().map_err(|e| e.into()));
+    wrap_err(xq.flush().map_err(|e| e.into()));
   }));
-  work.push(task::spawn(async move {
+  work.push(std::thread::spawn(move || {
     let sc = sender.clone();
     wrap_err(osmpbf::ElementReader::new(pbf).for_each(move |element| {
       let s = sc.clone();
-      task::block_on(async move {
-        wrap_err(s.send(Feature::new(element)).await.map_err(|e| e.into()));
-      });
+      wrap_err(s.send(Feature::new(element)).map_err(|e| e.into()));
     }).map_err(|e| e.into()));
-    sender.close();
   }));
-  futures::future::join_all(work).await;
+  for t in work.into_iter() {
+    t.join().unwrap();
+  }
+
   Ok(())
 }
 

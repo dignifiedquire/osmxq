@@ -1,22 +1,20 @@
-use async_std::{io::{Read,Write,Seek},fs,path::PathBuf};
+use std::{io::{Read,Write,Seek},fs,path::PathBuf};
 
 pub trait RW: Read+Write+Seek+Truncate+Send+Sync+Unpin+'static {}
 impl RW for fs::File {}
 
-#[async_trait::async_trait]
 pub trait Truncate {
-  async fn set_len(&mut self, len: u64) -> Result<(),Error>;
+  fn set_len(&mut self, len: u64) -> Result<(),Error>;
 }
 
 type Error = Box<dyn std::error::Error+Send+Sync>;
 
-#[async_trait::async_trait]
 pub trait Storage<S>: Send+Sync+Unpin where S: RW {
-  async fn open_rw(&mut self, name: &str) -> Result<S,Error>;
-  async fn open_r(&mut self, name: &str) -> Result<Option<S>,Error>;
-  async fn open_a(&mut self, name: &str) -> Result<S,Error>;
-  async fn remove(&mut self, name: &str) -> Result<(),Error>;
-  async fn exists(&mut self, name: &str) -> bool;
+  fn open_rw(&mut self, name: &str) -> Result<S,Error>;
+  fn open_r(&mut self, name: &str) -> Result<Option<S>,Error>;
+  fn open_a(&mut self, name: &str) -> Result<S,Error>;
+  fn remove(&mut self, name: &str) -> Result<(),Error>;
+  fn exists(&mut self, name: &str) -> bool;
 }
 
 pub struct FileStorage {
@@ -24,44 +22,42 @@ pub struct FileStorage {
 }
 
 impl FileStorage {
-  pub async fn open_from_path<P>(path: P) -> Result<Self,Error>
+  pub fn open_from_path<P>(path: P) -> Result<Self,Error>
   where PathBuf: From<P> {
     Ok(Self { path: path.into() })
   }
 }
 
-#[async_trait::async_trait]
 impl Storage<fs::File> for FileStorage {
-  async fn open_rw(&mut self, name: &str) -> Result<fs::File,Error> {
+  fn open_rw(&mut self, name: &str) -> Result<fs::File,Error> {
     let p = self.path.join(name);
-    fs::create_dir_all(p.parent().unwrap()).await?;
-    Ok(fs::OpenOptions::new().read(true).write(true).create(true).open(p).await?)
+    fs::create_dir_all(p.parent().unwrap())?;
+    Ok(fs::OpenOptions::new().read(true).write(true).create(true).open(p)?)
   }
-  async fn open_r(&mut self, name: &str) -> Result<Option<fs::File>,Error> {
+  fn open_r(&mut self, name: &str) -> Result<Option<fs::File>,Error> {
     let p = self.path.join(name);
-    if p.exists().await {
-      Ok(Some(fs::OpenOptions::new().read(true).open(p).await?))
+    if p.exists() {
+      Ok(Some(fs::OpenOptions::new().read(true).open(p)?))
     } else {
       Ok(None)
     }
   }
-  async fn open_a(&mut self, name: &str) -> Result<fs::File,Error> {
+  fn open_a(&mut self, name: &str) -> Result<fs::File,Error> {
     let p = self.path.join(name);
-    fs::create_dir_all(p.parent().unwrap()).await?;
-    Ok(fs::OpenOptions::new().read(true).append(true).create(true).open(p).await?)
+    fs::create_dir_all(p.parent().unwrap())?;
+    Ok(fs::OpenOptions::new().read(true).append(true).create(true).open(p)?)
   }
-  async fn remove(&mut self, name: &str) -> Result<(),Error> {
+  fn remove(&mut self, name: &str) -> Result<(),Error> {
     let p = self.path.join(name);
-    fs::remove_file(p).await.map_err(|e| e.into())
+    fs::remove_file(p).map_err(|e| e.into())
   }
-  async fn exists(&mut self, name: &str) -> bool {
-    self.path.join(name).exists().await
+  fn exists(&mut self, name: &str) -> bool {
+    self.path.join(name).exists()
   }
 }
 
-#[async_trait::async_trait]
 impl Truncate for fs::File {
-  async fn set_len(&mut self, len: u64) -> Result<(),Error> {
-    fs::File::set_len(self, len).await.map_err(|e| e.into())
+  fn set_len(&mut self, len: u64) -> Result<(),Error> {
+    fs::File::set_len(self, len).map_err(|e| e.into())
   }
 }
