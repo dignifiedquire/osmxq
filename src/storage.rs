@@ -33,6 +33,16 @@ pub enum Mmap {
     Read(memmap::Mmap),
     Write(memmap::MmapMut, PathBuf, usize),
 }
+impl Drop for Mmap {
+    fn drop(&mut self) {
+        match self {
+            Mmap::Read(_) => {},
+            Mmap::Write(m, _, _) => {
+                m.flush().unwrap();
+            }
+        }
+    }
+}
 
 impl Deref for Mmap {
     type Target = [u8];
@@ -61,7 +71,7 @@ impl RW for Mmap {
                 m[*offset..buf.len() + *offset].copy_from_slice(buf);
                 *offset += buf.len();
 
-                m.flush_range(*offset, buf.len())?;
+                //m.flush_range(*offset, buf.len())?;
                 Ok(())
             }
         }

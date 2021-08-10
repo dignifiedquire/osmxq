@@ -282,11 +282,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     if let Some(ids) = self.id_updates.write().unwrap().get_mut(&b) {
       ids.insert(id, q_id);
       self.id_update_count_total += 1;
-      if let Some(c) = self.id_update_count.get_mut(&b) {
-        *c += 1;
-      } else {
-        self.id_update_count.insert(b, 1);
-      }
+      let c = self.id_update_count.entry(b).or_insert(0);
+      *c += 1;
       return Ok(());
     }
     {
@@ -294,11 +291,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       ids.insert(id, q_id);
       self.id_updates.write().unwrap().insert(b, ids);
       self.id_update_count_total += 1;
-      if let Some(c) = self.id_update_count.get_mut(&b) {
-        *c += 1;
-      } else {
-        self.id_update_count.insert(b, 1);
-      }
+      let c = self.id_update_count.entry(b).or_insert(0);
+      *c += 1;
     }
     Ok(())
   }
@@ -337,16 +331,10 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
   }
   fn quad_add_update_count(&mut self, q_id: &QuadId, n: u64) {
     self.quad_update_count_total += n;
-    if let Some(c) = self.quad_count.get_mut(q_id) {
-      *c += n;
-    } else {
-      self.quad_count.insert(*q_id, n);
-    }
-    if let Some(c) = self.quad_update_count.get_mut(q_id) {
-      *c += n;
-    } else {
-      self.quad_update_count.insert(*q_id, n);
-    }
+    let c = self.quad_count.entry(*q_id).or_insert(0);
+    *c += n;
+    let c = self.quad_update_count.entry(*q_id).or_insert(0);
+    *c += n;
   }
   fn quad_get_update_count(&self, q_id: &QuadId) -> u64 {
     self.quad_count.get(q_id).cloned().unwrap_or(0)
@@ -428,13 +416,9 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let mut queue = vec![];
     for q_id in self.quad_updates.read().unwrap().keys() {
       let age = {
-        if let Some(age) = self.quad_update_age.get_mut(q_id) {
-          *age += 1;
-          age.clone()
-        } else {
-          self.quad_update_age.insert(*q_id, 1);
-          1
-        }
+        let age = self.quad_update_age.entry(*q_id).or_insert(0);
+        *age += 1;
+        age.clone()
       };
       if age > self.fields.quad_flush_max_age {
         //println!["flush {} (age)", q_id];
@@ -521,13 +505,9 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let mut queue = Vec::new();
     for b in self.id_updates.read().unwrap().keys() {
       let age = {
-        if let Some(age) = self.id_update_age.get_mut(b) {
-          *age += 1;
-          age.clone()
-        } else {
-          self.id_update_age.insert(*b, 1);
-          1
-        }
+        let age = self.id_update_age.entry(*b).or_insert(0);
+        *age += 1;
+        age.clone()
       };
       if age > self.fields.id_flush_max_age {
         queue.push(*b);
@@ -812,11 +792,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
           o_q_id = ic.get(&id).copied();
         }
         if let Some(q_id) = o_q_id {
-          if let Some(items) = result.get_mut(&q_id) {
-            items.push(i);
-          } else {
-            result.insert(q_id, vec![i]);
-          }
+          let items = result.entry(q_id).or_insert_with(|| Vec::with_capacity(1));
+          items.push(i);
         } else if let Some(p) = check_position_records(r, &rmap) {
           positions.insert(i,p);
         } else if let Some(f_id) = r.get_refs().first() {
@@ -830,11 +807,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
         if positions.contains_key(&i) { continue }
         if let Some(f_id) = r.get_refs().first() {
           if let Some(q_id) = qids.get(&f_id) {
-            if let Some(items) = result.get_mut(&q_id) {
-              items.push(i);
-            } else {
-              result.insert(*q_id, vec![i]);
-            }
+            let items = result.entry(*q_id).or_insert_with(|| Vec::with_capacity(1));
+            items.push(i);
           } else {
             self.missing_updates.insert(r.get_id(),r.clone());
             self.missing_count += 1;
@@ -858,11 +832,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
           QTree::Quad { id, bbox } => {
             positions.drain_filter(|i,p| {
               if overlap(p,bbox) {
-                if let Some(items) = result.get_mut(id) {
-                  items.push(*i);
-                } else {
-                  result.insert(*id, vec![*i]);
-                }
+                let items = result.entry(*id).or_insert_with(|| Vec::with_capacity(1));
+                items.push(*i);
                 true
               } else {
                 false
@@ -871,21 +842,14 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
           }
         }
       }
-      let tmp = ncursors;
-      ncursors = cursors;
-      cursors = tmp;
+      std::mem::swap(&mut ncursors, &mut cursors);
     }
     //assert![positions.is_empty(), "!positions.is_empty()"];
     Ok(result)
   }
   fn lock_file(&mut self, file: &String) {
-    if let Some(active) = self.active_files.read().unwrap().get(file) {
-      let _lock = active.lock().unwrap();
-    }
-    let active = Arc::new(Mutex::new(()));
-    let ac = active.clone();
-    self.active_files.write().unwrap().insert(file.clone(), active);
-    let _lock = ac.lock().unwrap();
+    let mutex = self.active_files.write().unwrap().entry(file.clone()).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+    let _lock = mutex.lock().unwrap();
   }
   fn open_file_r(&mut self, file: &String) -> Result<Option<S>,Error> {
     Self::open_file_r_params(file, self.active_files.clone(), self.storage.clone())
@@ -895,25 +859,18 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     active_files: Arc<RwLock<HashMap<String,Arc<Mutex<()>>>>>,
     storage: Arc<Mutex<Box<dyn Storage<S>>>>,
   ) -> Result<Option<S>,Error> {
-    if let Some(active) = active_files.read().unwrap().get(file) {
-      let _lock = active.lock().unwrap();
-    }
+
+    let mutex = active_files.write().unwrap().entry(file.clone()).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
     let mut st = storage.lock().unwrap();
-    let active = Arc::new(Mutex::new(()));
-    let ac = active.clone();
-    active_files.write().unwrap().insert(file.clone(), active);
-    let _lock = ac.lock().unwrap();
+
+    let _lock = mutex.lock().unwrap();
     st.open_r(file)
   }
   fn open_file_rw(&mut self, file: &String, size: u64) -> Result<S,Error> {
-    if let Some(active) = self.active_files.read().unwrap().get(file) {
-      let _lock = active.lock().unwrap();
-    }
+    let mutex = self.active_files.write().unwrap().entry(file.clone()).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+
     let mut st = self.storage.lock().unwrap();
-    let active = Arc::new(Mutex::new(()));
-    let ac = active.clone();
-    self.active_files.write().unwrap().insert(file.clone(), active);
-    let _lock = ac.lock();
+    let _lock = mutex.lock().unwrap();
     st.open_rw(file, size)
   }
   fn open_file_a(&mut self, file: &String) -> Result<S,Error> {
@@ -928,14 +885,12 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     active_files: Arc<RwLock<HashMap<String,Arc<Mutex<()>>>>>,
     storage: Arc<Mutex<Box<dyn Storage<S>>>>,
   ) -> Result<S,Error> {
-    if let Some(active) = active_files.read().unwrap().get(file) {
-      let _lock = active.lock().unwrap();
-    }
+    let mutex = active_files.write().unwrap().entry(file.clone())
+                              .or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+
     let mut st = storage.lock().unwrap();
-    let active = Arc::new(Mutex::new(()));
-    let ac = active.clone();
-    active_files.write().unwrap().insert(file.clone(), active);
-    let _lock = ac.lock().unwrap();
+    let _lock = mutex.lock().unwrap();
+
     st.open_a(file)
   }
   fn close_file(&mut self, file: &String) {
@@ -1063,7 +1018,7 @@ fn pack_ids<R: RW>(records: &HashMap<RecordId,QuadId>, file: &mut R) -> std::io:
     offset += varint::encode(*q_id, &mut file[offset..]).unwrap();
   }
   file.set_offset(offset);
-  file.flush()?;
+  //file.flush()?;
   Ok(())
 }
 
