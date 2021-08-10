@@ -2,12 +2,12 @@
 
 use ahash::AHashMap as HashMap;
 use lru::LruCache;
-use std::{fs,sync::{RwLock,Arc,Mutex}};
+use std::{sync::{RwLock,Arc,Mutex}};
 use desert::{varint,ToBytes,FromBytes};
 use rayon::prelude::*;
 
 mod storage;
-pub use storage::{Storage,FileStorage,RW};
+pub use storage::{Storage,FileStorage,RW,MmapStorage,Mmap};
 mod meta;
 use meta::Meta;
 
@@ -101,75 +101,75 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
   pub fn open(storage: Box<dyn Storage<S>>) -> Result<Self,Error> {
     Self::from_fields(storage, Fields::default())
   }
+
   pub fn from_fields(mut storage: Box<dyn Storage<S>>, mut fields: Fields) -> Result<Self,Error> {
-    let mfile = "meta".to_string();
-    let mut buf = vec![];
-    if let Some(mut s) = storage.open_r(&mfile)? {
-      s.read_to_end(&mut buf)?;
-    }
+      let mfile = "meta".to_string();
+      match storage.open_r(&mfile)? {
+          Some(file) => {
+              let buf = file.read_to_slice();
+              let (_,meta) = Meta::from_bytes(&buf)?;
+              fields.id_block_size = meta.id_block_size;
+              let quad_bbox = Self::get_bboxes(&meta.root);
+              let xq = Self {
+                  storage: Arc::new(Mutex::new(storage)),
+                  root: meta.root,
+                  quad_bbox,
+                  active_files: Arc::new(RwLock::new(HashMap::new())),
+                  record_cache: LruCache::new(fields.record_cache_size),
+                  quad_updates: Arc::new(RwLock::new(HashMap::new())),
+                  quad_update_count_total: 0,
+                  quad_update_count: HashMap::new(),
+                  quad_update_age: HashMap::new(),
+                  quad_count: meta.quad_count,
+                  id_cache: Arc::new(Mutex::new(LruCache::new(fields.id_cache_size))),
+                  id_updates: Arc::new(RwLock::new(HashMap::new())),
+                  id_update_age: HashMap::new(),
+                  id_update_count_total: 0,
+                  id_update_count: HashMap::new(),
+                  missing_updates: HashMap::new(),
+                  missing_count: 0,
+                  next_quad_id: meta.next_quad_id,
+                  next_missing_id: 0,
+                  fields,
+              };
+              Ok(xq)
+          }
+          None => {
+              let mut quad_updates = HashMap::new();
+              quad_updates.insert(0, None);
+              let mut quad_count = HashMap::new();
+              quad_count.insert(0, 0);
+              let mut quad_bbox = HashMap::new();
+              quad_bbox.insert(0, (-180.0,-90.0,180.0,90.0));
 
-    if buf.is_empty() {
-      let mut quad_updates = HashMap::new();
-      quad_updates.insert(0, None);
-      let mut quad_count = HashMap::new();
-      quad_count.insert(0, 0);
-      let mut quad_bbox = HashMap::new();
-      quad_bbox.insert(0, (-180.0,-90.0,180.0,90.0));
-
-      let xq = Self {
-        storage: Arc::new(Mutex::new(storage)),
-        root: QTree::Quad {
-          id: 0,
-          bbox: (-180.0,-90.0,180.0,90.0),
-        },
-        quad_bbox,
-        active_files: Arc::new(RwLock::new(HashMap::new())),
-        record_cache: LruCache::new(fields.record_cache_size),
-        quad_updates: Arc::new(RwLock::new(quad_updates)),
-        quad_update_count_total: 0,
-        quad_update_count: HashMap::new(),
-        quad_update_age: HashMap::new(),
-        quad_count,
-        id_cache: Arc::new(Mutex::new(LruCache::new(fields.id_cache_size))),
-        id_updates: Arc::new(RwLock::new(HashMap::new())),
-        id_update_age: HashMap::new(),
-        id_update_count_total: 0,
-        id_update_count: HashMap::new(),
-        missing_updates: HashMap::new(),
-        missing_count: 0,
-        next_quad_id: 1,
-        next_missing_id: 0,
-        fields,
-      };
-      Ok(xq)
-    } else {
-      let (_,meta) = Meta::from_bytes(&buf)?;
-      fields.id_block_size = meta.id_block_size;
-      let quad_bbox = Self::get_bboxes(&meta.root);
-      let xq = Self {
-        storage: Arc::new(Mutex::new(storage)),
-        root: meta.root,
-        quad_bbox,
-        active_files: Arc::new(RwLock::new(HashMap::new())),
-        record_cache: LruCache::new(fields.record_cache_size),
-        quad_updates: Arc::new(RwLock::new(HashMap::new())),
-        quad_update_count_total: 0,
-        quad_update_count: HashMap::new(),
-        quad_update_age: HashMap::new(),
-        quad_count: meta.quad_count,
-        id_cache: Arc::new(Mutex::new(LruCache::new(fields.id_cache_size))),
-        id_updates: Arc::new(RwLock::new(HashMap::new())),
-        id_update_age: HashMap::new(),
-        id_update_count_total: 0,
-        id_update_count: HashMap::new(),
-        missing_updates: HashMap::new(),
-        missing_count: 0,
-        next_quad_id: meta.next_quad_id,
-        next_missing_id: 0,
-        fields,
-      };
-      Ok(xq)
-    }
+              let xq = Self {
+                  storage: Arc::new(Mutex::new(storage)),
+                  root: QTree::Quad {
+                      id: 0,
+                      bbox: (-180.0,-90.0,180.0,90.0),
+                  },
+                  quad_bbox,
+                  active_files: Arc::new(RwLock::new(HashMap::new())),
+                  record_cache: LruCache::new(fields.record_cache_size),
+                  quad_updates: Arc::new(RwLock::new(quad_updates)),
+                  quad_update_count_total: 0,
+                  quad_update_count: HashMap::new(),
+                  quad_update_age: HashMap::new(),
+                  quad_count,
+                  id_cache: Arc::new(Mutex::new(LruCache::new(fields.id_cache_size))),
+                  id_updates: Arc::new(RwLock::new(HashMap::new())),
+                  id_update_age: HashMap::new(),
+                  id_update_count_total: 0,
+                  id_update_count: HashMap::new(),
+                  missing_updates: HashMap::new(),
+                  missing_count: 0,
+                  next_quad_id: 1,
+                  next_missing_id: 0,
+                  fields,
+              };
+              Ok(xq)
+          }
+      }
   }
   pub fn get_quad_ids(&self) -> Vec<QuadId> {
     let mut cursors = vec![&self.root];
@@ -218,9 +218,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
   pub fn read_quad(&mut self, q_id: QuadId) -> Result<HashMap<RecordId,R>,Error> {
     let qfile = quad_file(q_id);
     let mut records = match self.open_file_r(&qfile)? {
-      Some(mut s) => {
-        let mut buf = vec![];
-        s.read_to_end(&mut buf)?;
+      Some(s) => {
+        let buf = s.read_to_slice();
         let mut rs = HashMap::new();
         let mut offset = 0;
         while offset < buf.len() {
@@ -384,27 +383,26 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     self.quad_update_age.insert(q_id, 0);
     Ok(())
   }
-    pub fn quad_flush_by_ids(&mut self, q_ids: &[QuadId]) -> Result<(),Error> {
+
+  pub fn quad_flush_by_ids(&mut self, q_ids: &[QuadId]) -> Result<(),Error> {
       let results = q_ids.par_iter().map(|q| {
       let q_id = *q;
-      let active_files = self.active_files.clone();
-      let storage = self.storage.clone();
-      let quc = self.quad_updates.clone();
 
-        let o_rs = {
-          let mut qu = quc.write().unwrap();
-          qu.remove(&q_id).and_then(|v| v)
-        };
-        if o_rs.is_none() { return Ok((q_id, 0)) }
-        let rs: HashMap<u64,R> = o_rs.unwrap();
-        if rs.is_empty() { return Ok((q_id, 0)) }
-        let qfile = quad_file(q_id);
-        let mut s = Self::open_file_a_params(&qfile, active_files.clone(), storage)?;
-        let buf = R::pack(&rs);
-        s.write_all(&buf)?;
-        s.flush()?;
-        Self::close_file_params(&qfile, active_files);
-        Ok((q_id, rs.len() as u64))
+      let o_rs = {
+        let mut qu = self.quad_updates.write().unwrap();
+        qu.remove(&q_id).and_then(|v| v)
+      };
+      if o_rs.is_none() { return Ok((q_id, 0)) }
+      let rs: HashMap<u64,R> = o_rs.unwrap();
+      if rs.is_empty() { return Ok((q_id, 0)) }
+      let qfile = quad_file(q_id);
+      let mut s = Self::open_file_a_params(&qfile, self.active_files.clone(), self.storage.clone())?;
+      let buf = R::pack(&rs);
+      s.write_all(&buf)?;
+      s.flush()?;
+      Self::close_file_params(&qfile, self.active_files.clone());
+
+      Ok((q_id, rs.len() as u64))
     }).collect::<Vec<Result<(u64, u64), Error>>>();
 
     for r in results.into_iter() {
@@ -541,9 +539,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let m_id = self.next_missing_id;
     self.next_missing_id += 1;
     let mfile = missing_file(m_id);
-    let mut s = self.open_file_rw(&mfile)?;
     let buf = R::pack(&self.missing_updates);
-    s.set_len(buf.len() as u64)?;
+    let mut s = self.open_file_rw(&mfile, buf.len() as u64)?;
     s.write_all(&buf)?;
     s.flush()?;
     self.missing_updates.clear();
@@ -567,11 +564,10 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       return Ok(Some(q_id));
     }
     let ifile = self.id_file(id);
-    let mut buf = vec![];
-    if let Some(mut s) = self.open_file_r(&ifile)? {
-      s.read_to_end(&mut buf)?;
-    }
     let mut ids = HashMap::new();
+
+    if let Some(file) = self.open_file_r(&ifile)? {
+        let buf = file.read_to_slice();
     {
       let mut offset = 0;
       while offset < buf.len() {
@@ -579,6 +575,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
         offset += s;
         if s == 0 { break }
       }
+    }
     }
     let g = ids.get(&id).copied();
     {
@@ -607,11 +604,10 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
         if let Some(q_id) = o_q_id {
           return Some((id,q_id));
         }
-        let mut buf = vec![];
-        if let Some(mut s) = Self::open_file_r_params(&ifile, active_files.clone(), storage).unwrap() {
-          s.read_to_end(&mut buf).unwrap(); // TODO: fix error handling
-        }
         let mut ids = HashMap::new();
+
+        if let Some(file) = Self::open_file_r_params(&ifile, active_files.clone(), storage).unwrap() {
+            let buf = file.read_to_slice();
         {
           let mut offset = 0;
           while offset < buf.len() {
@@ -619,6 +615,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
             offset += s;
             if s == 0 { break }
           }
+        }
         }
         let g = ids.get(&id).copied();
         {
@@ -645,19 +642,17 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       }
     }
     let qfile = quad_file(q_id);
-    let mut buf = vec![];
-    if let Some(mut s) = self.open_file_r(&qfile)? {
-      s.read_to_end(&mut buf)?;
-    }
-    let records = {
+    let mut records = HashMap::new();
+
+    if let Some(file) = self.open_file_r(&qfile)? {
+      let buf = file.read_to_slice();
       let mut offset = 0;
-      let mut records = HashMap::new();
+    
       while offset < buf.len() {
         let s = R::unpack(&buf[offset..], &mut records)?;
         offset += s;
         if s == 0 { break }
       }
-      records
     };
     let r = records.get(&id).cloned();
     for (r_id,r) in records {
@@ -910,7 +905,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let _lock = ac.lock().unwrap();
     st.open_r(file)
   }
-  fn open_file_rw(&mut self, file: &String) -> Result<S,Error> {
+  fn open_file_rw(&mut self, file: &String, size: u64) -> Result<S,Error> {
     if let Some(active) = self.active_files.read().unwrap().get(file) {
       let _lock = active.lock().unwrap();
     }
@@ -919,7 +914,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let ac = active.clone();
     self.active_files.write().unwrap().insert(file.clone(), active);
     let _lock = ac.lock();
-    st.open_rw(file)
+    st.open_rw(file, size)
   }
   fn open_file_a(&mut self, file: &String) -> Result<S,Error> {
     Self::open_file_a_params(
@@ -960,21 +955,19 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       let m_records = self.missing_updates.drain().map(|(_,r)| r).collect::<Vec<_>>();
       for i in missing_start..missing_end {
         let mfile = missing_file(i);
-        let mut buf = vec![];
-        {
-          if let Some(mut s) = self.open_file_r(&mfile)? {
-            s.read_to_end(&mut buf)?;
-          }
-          self.close_file(&mfile);
-        }
         let mut records = HashMap::new();
-        {
-          let mut offset = 0;
-          while offset < buf.len() {
-            let s = R::unpack(&buf, &mut records)?;
-            offset += s;
-            if s == 0 { break }
-          }
+
+        if let Some(file) = self.open_file_r(&mfile)? {
+            let buf = file.read_to_slice();
+            {
+                let mut offset = 0;
+                while offset < buf.len() {
+                    let s = R::unpack(&buf, &mut records)?;
+                    offset += s;
+                    if s == 0 { break }
+                }
+            }
+            self.close_file(&mfile);
         }
         self.add_records(&records.drain().map(|(_,r)| r).collect::<Vec<R>>())?;
       }
@@ -1007,9 +1000,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
   }
   pub fn save_meta(&mut self) -> Result<(),Error> {
     let mfile = "meta".to_string();
-    let mut s = self.open_file_rw(&mfile)?;
     let buf = self.get_meta().to_bytes()?;
-    s.set_len(buf.len() as u64)?;
+    let mut s = self.open_file_rw(&mfile, buf.len() as u64)?;
     s.write_all(&buf)?;
     self.close_file(&mfile);
     Ok(())
@@ -1023,9 +1015,9 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
   }
 }
 
-impl<R> XQ<fs::File,R> where R: Record {
-  pub fn open_from_path(path: &str) -> Result<XQ<fs::File,R>,Error> {
-    Ok(Self::open(Box::new(FileStorage::open_from_path(path)?))?)
+impl<R> XQ<Mmap,R> where R: Record {
+  pub fn open_from_path(path: &str) -> Result<XQ<Mmap,R>,Error> {
+    Ok(Self::open(Box::new(MmapStorage::open_from_path(path)?))?)
   }
 }
 
