@@ -78,7 +78,7 @@ impl RW for Mmap {
             Mmap::Write(m, p, _) => {
                 let file = fs::OpenOptions::new().read(true).write(true).create(true).open(p)?;
                 file.set_len(len)?;
-                *m = unsafe { memmap::MmapOptions::new().map_mut(&file)? };
+                *m = unsafe { memmap::MmapOptions::new().len(len as usize).map_mut(&file)? };
                 Ok(())
             }
         }
@@ -103,8 +103,9 @@ impl Storage<Mmap> for MmapStorage {
     let p = self.path.join(name);
     fs::create_dir_all(p.parent().unwrap())?;
       let file = fs::OpenOptions::new().read(true).write(true).create(true).open(&p)?;
+      let size = size.max(1024);
       file.set_len(size)?;
-    let x = unsafe { memmap::MmapOptions::new().map_mut(&file)? };
+    let x = unsafe { memmap::MmapOptions::new().len(size as usize).map_mut(&file)? };
 
     Ok(Mmap::Write(x, p, 0))
   }
@@ -112,7 +113,9 @@ impl Storage<Mmap> for MmapStorage {
     let p = self.path.join(name);
     if p.exists() {
       let file = fs::OpenOptions::new().read(true).open(p)?;
-        let x = unsafe {memmap::MmapOptions::new().map(&file)? };
+      let size = file.metadata()?.len();
+      let x = unsafe {memmap::MmapOptions::new().len(size as usize).map(&file)? };
+
       Ok(Some(Mmap::Read(x)))
     } else {
       Ok(None)
@@ -122,7 +125,11 @@ impl Storage<Mmap> for MmapStorage {
     let p = self.path.join(name);
     fs::create_dir_all(p.parent().unwrap())?;
     let file = fs::OpenOptions::new().read(true).append(true).create(true).open(&p)?;
-      let x = unsafe { memmap::MmapOptions::new().map_mut(&file)? };
+      if file.metadata()?.len() == 0 {
+          file.set_len(1024)?;
+      }
+    let size = file.metadata()?.len();
+    let x = unsafe { memmap::MmapOptions::new().len(size as usize).map_mut(&file)? };
     Ok(Mmap::Write(x, p, 0))
   }
   fn remove(&mut self, name: &str) -> Result<(),Error> {

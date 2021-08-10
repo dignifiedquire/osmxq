@@ -534,7 +534,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     self.next_missing_id += 1;
     let mfile = missing_file(m_id);
 
-    let mut s = self.open_file_rw(&mfile, 0)?;
+    let mut s = self.open_file_rw(&mfile, 1024)?;
     R::pack(&self.missing_updates, &mut s)?;
     self.missing_updates.clear();
     self.close_file(&mfile);
