@@ -500,9 +500,16 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     self.id_flush_by_blocks(&blocks)
   }
   pub fn id_flush_partial(&mut self, n: usize) -> Result<(),Error> {
-    let mut qs = self.id_updates.read().unwrap().keys()
-      .filter(|b| { self.id_update_count.get(b).copied().unwrap_or(0) > 0 })
-      .copied()
+      let mut qs = self
+          .id_updates.read().unwrap()
+          .par_iter()
+          .filter_map(|(b, _)| { 
+              if self.id_update_count.get(b).copied().unwrap_or(0) > 0 {
+                  Some(*b)
+              } else {
+                  None
+              }
+          })
       .collect::<Vec<QuadId>>();
     qs.sort_unstable_by(|a,b| {
       let ca = self.id_update_count.get(a).copied().unwrap_or(0);
@@ -510,7 +517,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       cb.cmp(&ca) // descending
     });
     self.id_flush_by_blocks(&qs[0..n.min(qs.len())])?;
-    let mut queue = vec![];
+
+    let mut queue = Vec::new();
     for b in self.id_updates.read().unwrap().keys() {
       let age = {
         if let Some(age) = self.id_update_age.get_mut(b) {
@@ -541,7 +549,6 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     Ok(())
   }
   pub fn flush(&mut self) -> Result<(),Error> {
-    // todo: parallel io
     self.quad_flush_all()?;
     self.id_flush_all()?;
     self.missing_flush()?;
