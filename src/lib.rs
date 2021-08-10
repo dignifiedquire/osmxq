@@ -7,7 +7,7 @@ use desert::{varint,ToBytes,FromBytes};
 use rayon::prelude::*;
 
 mod storage;
-pub use storage::{Storage,FileStorage,RW,MmapStorage,Mmap};
+pub use storage::{Storage,RW,MmapStorage,Mmap};
 mod meta;
 use meta::Meta;
 
@@ -22,7 +22,7 @@ pub trait Record: Send+Sync+Clone+std::fmt::Debug+'static {
   fn get_id(&self) -> RecordId;
   fn get_refs(&self) -> Vec<RecordId>;
   fn get_position(&self) -> Option<Position>;
-  fn pack(records: &HashMap<RecordId,Self>) -> Vec<u8> where Self: Sized;
+  fn pack<R: RW>(records: &HashMap<RecordId,Self>, buf: &mut R) -> std::io::Result<()> where Self: Sized;
   fn unpack(buf: &[u8], records: &mut HashMap<RecordId,Self>) -> Result<usize,Error>;
 }
 
@@ -374,9 +374,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     if rs.is_empty() { return Ok(()) }
     let qfile = quad_file(q_id);
     let mut s = self.open_file_a(&qfile)?;
-    let buf = R::pack(&rs);
-    s.write_all(&buf)?;
-    s.flush()?;
+    R::pack(&rs, &mut s)?;
+
     self.close_file(&qfile);
     self.quad_update_count_total -= rs.len() as u64;
     self.quad_update_count.insert(q_id, 0);
@@ -397,9 +396,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
       if rs.is_empty() { return Ok((q_id, 0)) }
       let qfile = quad_file(q_id);
       let mut s = Self::open_file_a_params(&qfile, self.active_files.clone(), self.storage.clone())?;
-      let buf = R::pack(&rs);
-      s.write_all(&buf)?;
-      s.flush()?;
+      R::pack(&rs, &mut s)?;
       Self::close_file_params(&qfile, self.active_files.clone());
 
       Ok((q_id, rs.len() as u64))
@@ -453,9 +450,7 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let ids = o_ids.unwrap();
     let ifile = id_file_from_block(b);
     let mut s = self.open_file_a(&ifile)?;
-    let buf = pack_ids(&ids);
-    s.write_all(&buf)?;
-    s.flush()?;
+    pack_ids(&ids, &mut s)?;
     self.id_update_count_total -= ids.len() as u64;
     {
       let mut ic = self.id_cache.lock().unwrap();
@@ -480,9 +475,8 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
         let ids = o_ids.unwrap();
         let ifile = id_file_from_block(b);
         let mut s = Self::open_file_a_params(&ifile, active_files.clone(), storage)?;
-        let buf = pack_ids(&ids);
-        s.write_all(&buf)?;
-        s.flush()?;
+        pack_ids(&ids, &mut s)?;
+        
         Ok((b,ids))
     }).collect::<Vec<Result<_, Error>>>();
     for r in results.into_iter() {
@@ -539,10 +533,9 @@ impl<S,R> XQ<S,R> where S: RW, R: Record {
     let m_id = self.next_missing_id;
     self.next_missing_id += 1;
     let mfile = missing_file(m_id);
-    let buf = R::pack(&self.missing_updates);
-    let mut s = self.open_file_rw(&mfile, buf.len() as u64)?;
-    s.write_all(&buf)?;
-    s.flush()?;
+
+    let mut s = self.open_file_rw(&mfile, 0)?;
+    R::pack(&self.missing_updates, &mut s)?;
     self.missing_updates.clear();
     self.close_file(&mfile);
     Ok(())
@@ -1050,19 +1043,21 @@ fn unpack_ids(buf: &[u8], records: &mut HashMap<RecordId,QuadId>) -> Result<usiz
   }
   Ok(offset)
 }
-fn pack_ids(records: &HashMap<RecordId,QuadId>) -> Vec<u8> {
+fn pack_ids<R: RW>(records: &HashMap<RecordId,QuadId>, file: &mut R) -> std::io::Result<()> {
   let mut size = 0;
   for (r_id,q_id) in records {
     size += varint::length(*r_id);
     size += varint::length(*q_id);
   }
-  let mut buf = vec![0;size];
+  file.set_len(size as u64)?;
   let mut offset = 0;
   for (r_id,q_id) in records {
-    offset += varint::encode(*r_id, &mut buf[offset..]).unwrap();
-    offset += varint::encode(*q_id, &mut buf[offset..]).unwrap();
+    offset += varint::encode(*r_id, &mut file[offset..]).unwrap();
+    offset += varint::encode(*q_id, &mut file[offset..]).unwrap();
   }
-  buf
+  file.set_offset(offset);
+  file.flush()?;
+  Ok(())
 }
 
 fn check_position_records<R: Record>(r: &R, records: &HashMap<RecordId,R>) -> Option<Position> {

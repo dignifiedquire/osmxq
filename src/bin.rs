@@ -91,7 +91,7 @@ impl Record for Feature {
   fn get_position(&self) -> Option<Position> {
     self.position
   }
-  fn pack(records: &HashMap<RecordId,Self>) -> Vec<u8> where Self: Sized {
+  fn pack<R: osmxq::RW>(records: &HashMap<RecordId,Self>, file: &mut R) -> std::io::Result<()> where Self: Sized {
     let mut size = 0;
     for (r_id,r) in records {
       let xid = r_id*2 + if r.position.is_some() { 1 } else { 0 };
@@ -99,17 +99,21 @@ impl Record for Feature {
       size += r.position.map(|p| p.count_bytes()).unwrap_or(0);
       size += r.refs.count_bytes();
     }
-    let mut buf = vec![0u8;size];
+    file.set_len(size as u64)?;
+
     let mut offset = 0;
     for (r_id,r) in records {
       let xid = r_id*2 + if r.position.is_some() { 1 } else { 0 };
-      offset += varint::encode(xid, &mut buf[offset..]).unwrap();
+      offset += varint::encode(xid, &mut file[offset..]).unwrap();
       if let Some(p) = r.position {
-        offset += p.write_bytes(&mut buf[offset..]).unwrap();
+        offset += p.write_bytes(&mut file[offset..]).unwrap();
       }
-      offset += r.refs.write_bytes(&mut buf[offset..]).unwrap();
+      offset += r.refs.write_bytes(&mut file[offset..]).unwrap();
     }
-    buf
+
+    file.set_offset(offset);
+    file.flush()?;
+    Ok(())
   }
   fn unpack(buf: &[u8], records: &mut HashMap<RecordId,Self>) -> Result<usize,Error> where Self: Sized {
     if buf.is_empty() { return Ok(0) }
